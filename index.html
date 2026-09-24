@@ -1,0 +1,389 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#080c1a">
+  <title>Planet Iterations — Cartoon Planet</title>
+  <style>
+    :root {
+      color-scheme: dark;
+      --ink: #080c1a;
+      --paper: #f5f2ea;
+      --muted: #a3abc2;
+      --line: rgba(245, 242, 234, 0.14);
+      --yellow: #ffd447;
+      --cyan: #42e5e0;
+      --pink: #ff5c91;
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    html {
+      min-width: 320px;
+      background: var(--ink);
+    }
+
+    body {
+      min-height: 100vh;
+      margin: 0;
+      color: var(--paper);
+      font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      background:
+        radial-gradient(circle at 12% 8%, rgba(66, 229, 224, 0.13), transparent 28rem),
+        radial-gradient(circle at 90% 18%, rgba(255, 92, 145, 0.12), transparent 30rem),
+        var(--ink);
+    }
+
+    body::before {
+      position: fixed;
+      z-index: -1;
+      inset: 0;
+      pointer-events: none;
+      content: "";
+      opacity: 0.35;
+      background-image:
+        radial-gradient(circle, rgba(255, 255, 255, 0.8) 0 1px, transparent 1.5px),
+        radial-gradient(circle, rgba(255, 255, 255, 0.5) 0 1px, transparent 1.5px);
+      background-position: 0 0, 42px 58px;
+      background-size: 84px 84px, 126px 126px;
+      mask-image: linear-gradient(to bottom, black, transparent 72%);
+    }
+
+    .page {
+      width: min(1120px, calc(100% - 40px));
+      margin: 0 auto;
+      padding: clamp(4rem, 10vw, 8rem) 0 4rem;
+    }
+
+    .hero {
+      max-width: 760px;
+      margin-bottom: clamp(3rem, 7vw, 5.5rem);
+    }
+
+    .eyebrow {
+      margin: 0 0 1.25rem;
+      color: var(--cyan);
+      font-size: 0.75rem;
+      font-weight: 750;
+      letter-spacing: 0.18em;
+      text-transform: uppercase;
+    }
+
+    h1 {
+      max-width: 720px;
+      margin: 0;
+      font-size: clamp(3.25rem, 9vw, 7.75rem);
+      font-weight: 800;
+      letter-spacing: -0.075em;
+      line-height: 0.92;
+    }
+
+    h1 span {
+      display: block;
+      color: var(--yellow);
+    }
+
+    .intro {
+      max-width: 570px;
+      margin: 2rem 0 0;
+      color: var(--muted);
+      font-size: clamp(1rem, 2vw, 1.2rem);
+      line-height: 1.7;
+    }
+
+    .grid {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 1.25rem;
+    }
+
+    .card {
+      position: relative;
+      display: flex;
+      min-height: 570px;
+      overflow: hidden;
+      flex-direction: column;
+      border: 1px solid var(--line);
+      border-radius: 24px;
+      color: inherit;
+      text-decoration: none;
+      background: rgba(16, 23, 45, 0.72);
+      box-shadow: 0 24px 80px rgba(0, 0, 0, 0.2);
+      transition: border-color 180ms ease, transform 180ms ease, box-shadow 180ms ease;
+    }
+
+    .card:hover,
+    .card:focus-visible {
+      border-color: rgba(245, 242, 234, 0.42);
+      transform: translateY(-6px);
+      box-shadow: 0 30px 90px rgba(0, 0, 0, 0.34);
+    }
+
+    .card:focus-visible {
+      outline: 3px solid var(--yellow);
+      outline-offset: 5px;
+    }
+
+    .card-art {
+      position: relative;
+      min-height: 250px;
+      overflow: hidden;
+      isolation: isolate;
+    }
+
+    .card-art::before {
+      position: absolute;
+      inset: 0;
+      z-index: -2;
+      content: "";
+      background:
+        radial-gradient(circle at 25% 20%, rgba(255, 255, 255, 0.55) 0 1px, transparent 1.5px),
+        radial-gradient(circle at 78% 30%, rgba(255, 255, 255, 0.4) 0 1px, transparent 1.5px),
+        radial-gradient(circle at 58% 72%, rgba(255, 255, 255, 0.45) 0 1px, transparent 1.5px);
+      background-size: 73px 73px, 109px 109px, 137px 137px;
+      opacity: 0.6;
+    }
+
+    .card--one .card-art {
+      background:
+        radial-gradient(circle at 50% 48%, rgba(255, 212, 71, 0.2), transparent 32%),
+        linear-gradient(145deg, #152e50, #10182f 62%, #0b1021);
+    }
+
+    .card--two .card-art {
+      background:
+        radial-gradient(circle at 48% 48%, rgba(66, 229, 224, 0.22), transparent 34%),
+        linear-gradient(145deg, #34204a, #171a3b 62%, #0b1021);
+    }
+
+    .planet {
+      position: absolute;
+      top: 50%;
+      left: 50%;
+      width: clamp(145px, 20vw, 190px);
+      aspect-ratio: 1;
+      border-radius: 50%;
+      transform: translate(-50%, -50%);
+      box-shadow: inset -28px -18px 42px rgba(0, 0, 0, 0.38), 0 25px 45px rgba(0, 0, 0, 0.3);
+    }
+
+    .planet::before,
+    .planet::after {
+      position: absolute;
+      border-radius: 50%;
+      content: "";
+    }
+
+    .planet--one {
+      background:
+        radial-gradient(ellipse at 35% 28%, #d5f6d2 0 8%, transparent 9%),
+        radial-gradient(ellipse at 65% 38%, #65b96f 0 15%, transparent 16%),
+        radial-gradient(ellipse at 32% 64%, #2e8a72 0 18%, transparent 19%),
+        radial-gradient(ellipse at 72% 70%, #8bd36e 0 12%, transparent 13%),
+        linear-gradient(135deg, #70d5a0 0 34%, #248b9b 35% 58%, #164a76 59% 100%);
+    }
+
+    .planet--one::before {
+      top: 21%;
+      left: 18%;
+      width: 36%;
+      height: 17%;
+      background: rgba(255, 255, 255, 0.78);
+      filter: blur(4px);
+    }
+
+    .planet--one::after {
+      right: -10%;
+      bottom: 23%;
+      width: 105%;
+      height: 20%;
+      border: 2px solid rgba(255, 212, 71, 0.7);
+      border-right-color: transparent;
+      transform: rotate(-17deg);
+    }
+
+    .planet--two {
+      background:
+        radial-gradient(circle at 27% 25%, rgba(255, 255, 255, 0.7) 0 2%, transparent 3%),
+        radial-gradient(ellipse at 60% 30%, #8be9d3 0 13%, transparent 14%),
+        radial-gradient(ellipse at 30% 62%, #5d7be5 0 18%, transparent 19%),
+        radial-gradient(ellipse at 68% 68%, #ff6a9b 0 15%, transparent 16%),
+        linear-gradient(135deg, #44d6d0 0 30%, #4459bc 31% 58%, #19234f 59% 100%);
+    }
+
+    .planet--two::before {
+      top: 18%;
+      left: 14%;
+      width: 48%;
+      height: 13%;
+      background: rgba(255, 255, 255, 0.58);
+      filter: blur(5px);
+    }
+
+    .planet--two::after {
+      right: -12%;
+      bottom: 28%;
+      width: 112%;
+      height: 17%;
+      border: 2px solid rgba(255, 92, 145, 0.7);
+      border-left-color: transparent;
+      transform: rotate(18deg);
+    }
+
+    .card-content {
+      display: flex;
+      flex: 1;
+      flex-direction: column;
+      padding: 1.75rem clamp(1.5rem, 4vw, 2.5rem) 2rem;
+    }
+
+    .card-meta {
+      display: flex;
+      justify-content: space-between;
+      gap: 1rem;
+      margin-bottom: 1.2rem;
+      color: var(--muted);
+      font-size: 0.72rem;
+      font-weight: 700;
+      letter-spacing: 0.12em;
+      text-transform: uppercase;
+    }
+
+    .card-meta span:first-child {
+      color: var(--yellow);
+    }
+
+    .card h2 {
+      margin: 0;
+      font-size: clamp(1.8rem, 3vw, 2.6rem);
+      letter-spacing: -0.05em;
+      line-height: 1;
+    }
+
+    .card p {
+      max-width: 420px;
+      margin: 1.2rem 0 2rem;
+      color: var(--muted);
+      line-height: 1.65;
+    }
+
+    .card-footer {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      margin-top: auto;
+      color: var(--paper);
+      font-size: 0.9rem;
+      font-weight: 700;
+    }
+
+    .arrow {
+      display: grid;
+      width: 2.5rem;
+      height: 2.5rem;
+      place-items: center;
+      border: 1px solid var(--line);
+      border-radius: 50%;
+      color: var(--yellow);
+      font-size: 1.2rem;
+      transition: background 180ms ease, transform 180ms ease;
+    }
+
+    .card:hover .arrow,
+    .card:focus-visible .arrow {
+      background: rgba(255, 212, 71, 0.14);
+      transform: translate(2px, -2px);
+    }
+
+    .footer {
+      display: flex;
+      justify-content: space-between;
+      gap: 1rem;
+      margin-top: 2.5rem;
+      color: #737d98;
+      font-size: 0.8rem;
+    }
+
+    @media (max-width: 720px) {
+      .page {
+        width: min(100% - 28px, 560px);
+        padding-top: 3.5rem;
+      }
+
+      .grid {
+        grid-template-columns: 1fr;
+      }
+
+      .card {
+        min-height: 520px;
+      }
+
+      .footer {
+        flex-direction: column;
+      }
+    }
+
+    @media (prefers-reduced-motion: reduce) {
+      .card,
+      .arrow {
+        transition: none;
+      }
+    }
+  </style>
+</head>
+<body>
+  <main class="page">
+    <header class="hero">
+      <p class="eyebrow">Planet lab / 02 iterations</p>
+      <h1>Two worlds. <span>One orbit.</span></h1>
+      <p class="intro">A growing collection of small, strange planets. Pick an iteration, then orbit around, zoom in, and inspect the details.</p>
+    </header>
+
+    <section class="grid" aria-label="Planet iterations">
+      <a class="card card--one" href="planet/cartoon-planet.html">
+        <div class="card-art" aria-hidden="true">
+          <div class="planet planet--one"></div>
+        </div>
+        <div class="card-content">
+          <div class="card-meta">
+            <span>Iteration 01</span>
+            <span>Three.js</span>
+          </div>
+          <h2>The Cartoon Planet</h2>
+          <p>A lively, comic-book world with clouds, mountains, cities, cars, and aircraft.</p>
+          <div class="card-footer">
+            <span>Open iteration</span>
+            <span class="arrow" aria-hidden="true">↗</span>
+          </div>
+        </div>
+      </a>
+
+      <a class="card card--two" href="planet2/">
+        <div class="card-art" aria-hidden="true">
+          <div class="planet planet--two"></div>
+        </div>
+        <div class="card-content">
+          <div class="card-meta">
+            <span>Iteration 02</span>
+            <span>Three.js</span>
+          </div>
+          <h2>Popworld</h2>
+          <p>A living planet experiment with a brighter, more playful atmosphere.</p>
+          <div class="card-footer">
+            <span>Open iteration</span>
+            <span class="arrow" aria-hidden="true">↗</span>
+          </div>
+        </div>
+      </a>
+    </section>
+
+    <footer class="footer">
+      <span>Cartoon Planet / Iteration archive</span>
+      <span>Built for curious browsers</span>
+    </footer>
+  </main>
+</body>
+</html>

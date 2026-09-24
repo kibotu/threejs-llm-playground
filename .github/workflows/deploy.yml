@@ -1,4 +1,4 @@
-name: Deploy cartoon planet to GitHub Pages
+name: Deploy planet iterations to GitHub Pages
 
 on:
   push:
@@ -30,7 +30,8 @@ jobs:
         shell: bash
         run: |
           mkdir -p _site
-          cp planet/cartoon-planet.html _site/index.html
+          cp index.html _site/index.html
+          cp -R planet planet2 _site/
 
       - name: Upload Pages artifact
         uses: actions/upload-pages-artifact@v3
