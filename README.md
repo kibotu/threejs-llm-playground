@@ -10,3 +10,5 @@ qwen 3.8 27b 3qm
 space bunny
 128,121 tokens
 
+qwen 3.8 flash next iq3_xxs
+194,427 tokens
