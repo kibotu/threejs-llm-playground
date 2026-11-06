@@ -1,0 +1,700 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Cartoon Planet</title>
+<style>
+  html, body { margin: 0; height: 100%; overflow: hidden; background: #07070f; }
+  canvas { display: block; }
+  #hud { position: fixed; left: 16px; bottom: 14px; color: #e8e8f0;
+    font: 12px/1.5 -apple-system, "Segoe UI", Roboto, sans-serif;
+    opacity: .6; pointer-events: none; user-select: none; }
+  #hud b { font-size: 14px; letter-spacing: .12em; }
+</style>
+</head>
+<body>
+<div id="hud"><b>PLANET</b><br>drag to orbit &nbsp;&middot;&nbsp; scroll or pinch to zoom</div>
+<script type="importmap">
+{
+  "imports": {
+    "three": "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js",
+    "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/"
+  }
+}
+</script>
+<script type="module">
+import * as THREE from 'three';
+import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
+
+const TAU = Math.PI * 2;
+const R = 1;                       // planet radius; everything scales from it
+const MOUNTAIN_H = 0.075;
+
+/* ---------------------------------------------------------------- render */
+const renderer = new THREE.WebGLRenderer({ antialias: true });
+renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
+renderer.setSize(innerWidth, innerHeight);
+renderer.shadowMap.enabled = true;
+renderer.shadowMap.type = THREE.BasicShadowMap;      // hard comic-book shadows
+document.body.appendChild(renderer.domElement);
+
+const scene = new THREE.Scene();
+scene.background = new THREE.Color(0x07070f);
+
+const camera = new THREE.PerspectiveCamera(50, innerWidth / innerHeight, 0.01, 400);
+camera.position.set(1.6, 0.8, 2.1);
+
+const controls = new OrbitControls(camera, renderer.domElement);
+controls.enableDamping = true;
+controls.dampingFactor = 0.07;
+controls.rotateSpeed = 0.5;
+controls.minDistance = 1.2;
+controls.maxDistance = 4.5;
+controls.enablePan = false;                 // the planet is the subject; panning only loses it
+controls.target.set(0, 0, 0);
+
+/* ----------------------------------------------------------------- sun */
+const SUN_DIR = new THREE.Vector3(-0.55, 0.34, 0.76).normalize();
+const sunLight = new THREE.DirectionalLight(0xfff2d0, 2.4);
+sunLight.position.copy(SUN_DIR).multiplyScalar(8);
+sunLight.castShadow = true;
+sunLight.shadow.mapSize.set(4096, 4096);
+sunLight.shadow.camera.left = -1.35;
+sunLight.shadow.camera.right = 1.35;
+sunLight.shadow.camera.top = 1.35;
+sunLight.shadow.camera.bottom = -1.35;
+sunLight.shadow.camera.near = 1;
+sunLight.shadow.camera.far = 16;
+sunLight.shadow.bias = -0.0002;
+sunLight.shadow.normalBias = 0.002;    // object-sized nudge; terrain acne is gone by not self-shadowing
+scene.add(sunLight, sunLight.target);
+
+const hemi = new THREE.HemisphereLight(0x3d5f9e, 0x141824, 0.75);
+scene.add(hemi);
+
+const sunMesh = new THREE.Mesh(
+  new THREE.IcosahedronGeometry(6, 2),
+  new THREE.MeshBasicMaterial({ color: 0xffe9a0 })
+);
+sunMesh.position.copy(SUN_DIR).multiplyScalar(60);
+scene.add(sunMesh);
+
+/* -------------------------------------------------------------- cel mat */
+function toonGradient(stops) {
+  const data = new Uint8Array(stops.length);
+  for (let i = 0; i < stops.length; i++) data[i] = stops[i];
+  const tex = new THREE.DataTexture(data, stops.length, 1, THREE.RedFormat);
+  tex.minFilter = tex.magFilter = THREE.NearestFilter;
+  tex.needsUpdate = true;
+  return tex;
+}
+const grad = toonGradient([40, 110, 190, 255]);
+
+// MeshToonMaterial has no flatShading in three 0.160; faceting comes from
+// non-indexed geometry + computeVertexNormals() producing per-face normals.
+function toon(color) {
+  return new THREE.MeshToonMaterial({ color, gradientMap: grad });
+}
+
+const OUTLINE = new THREE.MeshBasicMaterial({ color: 0x0b0b12, side: THREE.BackSide });
+
+// Orthonormal basis: up and forward must already be unit and perpendicular
+// (all call sites satisfy this: u/v are built perpendicular to d).
+// Uses scratch vectors: called every frame, allocates nothing.
+const _bx = new THREE.Vector3();
+function basisMatrix(up, forward, out) {
+  _bx.crossVectors(up, forward).normalize();
+  return out.makeBasis(_bx, up, forward);
+}
+
+/* ------------------------------------------------------- terrain noise */
+function hash(x, y, z) {
+  const n = Math.sin(x * 127.1 + y * 311.7 + z * 74.7) * 43758.5453;
+  return n - Math.floor(n);
+}
+const fade = t => t * t * (3 - 2 * t);
+function noiseAt(x, y, z) {
+  const xi = Math.floor(x), yi = Math.floor(y), zi = Math.floor(z);
+  const xf = fade(x - xi), yf = fade(y - yi), zf = fade(z - zi);
+  let v = 0;
+  for (let i = 0; i < 2; i++) for (let j = 0; j < 2; j++) for (let k = 0; k < 2; k++) {
+    const w = (i ? xf : 1 - xf) * (j ? yf : 1 - yf) * (k ? zf : 1 - zf);
+    if (w > 0) v += w * hash(xi + i, yi + j, zi + k);
+  }
+  return v;
+}
+function fbm(x, y, z) {
+  let v = 0, a = 0.5, f = 1;
+  for (let o = 0; o < 4; o++) { v += a * noiseAt(x * f, y * f, z * f); f *= 2.1; a *= 0.5; }
+  return v;                                  // roughly 0.05 .. 0.94
+}
+function eAt(d) {                            // single source of truth for terrain energy
+  return fbm(d.x * 2.3 + 11.3, d.y * 2.3 - 5.7, d.z * 2.3 + 2.9);
+}
+function elevFromE(e) {                      // elevation derived from energy; one fbm call feeds both
+  if (e < 0.5) return 0;                     // ocean floor stays at R
+  const m = Math.min((e - 0.5) / 0.3, 1);
+  return m * m * MOUNTAIN_H;
+}
+
+/* ------------------------------------------------------------- planet */
+const planetGroup = new THREE.Group();
+planetGroup.rotation.z = 0.22;              // axial tilt
+scene.add(planetGroup);
+
+// new Color(hex) already converts sRGB -> working linear space in three r160
+// (setHex -> ColorManagement.toWorkingColorSpace). No manual conversion needed;
+// doing it twice would darken every color in the scene.
+const C = {
+  oceanDeep:  new THREE.Color('#1e6fd0'),
+  oceanShelf: new THREE.Color('#3f97e8'),
+  sand:       new THREE.Color('#e8cf7a'),
+  grass1:     new THREE.Color('#4fc453'),
+  grass2:     new THREE.Color('#3aa04a'),
+  rock:       new THREE.Color('#9b744f'),
+  rockHigh:   new THREE.Color('#a9a4a0'),
+  snow:       new THREE.Color('#f6f7fb'),
+  ice:        new THREE.Color('#e8f3f7'),
+};
+
+// PolyhedronGeometry splits each icosahedron face into (detail+1)^2 subfaces:
+// detail 63 -> 81920 facets, ~0.016 rad plates. (detail 4 would be only 500 faces.)
+const terrainGeo = new THREE.IcosahedronGeometry(R, 63);
+{
+  const pos = terrainGeo.attributes.position;
+  const colors = new Float32Array(pos.count * 3);
+  // Pass 1: displace vertices continuously. Duplicate copies of the same source
+  // vertex sample the same elevation, so faces stay welded. Sampling elevAt() for
+  // cities/trees/cars now agrees with the surface; faceting comes from the
+  // per-face normals of pass 2, not from stepped elevation.
+  const disp = new Float32Array(pos.count);
+  const dir = new THREE.Vector3();
+  for (let i = 0; i < pos.count; i++) {
+    dir.fromBufferAttribute(pos, i).normalize();
+    disp[i] = Math.abs(dir.y) > 0.84 ? 0.012 : elevFromE(eAt(dir));
+  }
+  // Pass 2: write displaced positions; color each face by its centroid energy.
+  const a = new THREE.Vector3(), b = new THREE.Vector3(), c = new THREE.Vector3();
+  const mid = new THREE.Vector3(), col = new THREE.Color();
+  for (let i = 0; i < pos.count; i += 3) {
+    for (let j = 0; j < 3; j++) {
+      dir.fromBufferAttribute(pos, i + j).multiplyScalar((R + disp[i + j]) / R);
+      pos.setXYZ(i + j, dir.x, dir.y, dir.z);
+    }
+    a.fromBufferAttribute(pos, i);
+    b.fromBufferAttribute(pos, i + 1);
+    c.fromBufferAttribute(pos, i + 2);
+    mid.copy(a).add(b).add(c).multiplyScalar(1 / 3);
+    dir.copy(mid).normalize();
+    const e = eAt(dir);
+    let pick;
+    if (Math.abs(dir.y) > 0.86) pick = C.ice;
+    else if (e < 0.5) pick = e > 0.45 ? C.oceanShelf : C.oceanDeep;
+    else if (e < 0.535) pick = C.sand;
+    else if (e < 0.68) pick = (noiseAt(dir.x * 2.6 + 31.7, dir.y * 2.6 - 11.3, dir.z * 2.6 + 5.9) > 0.5 ? C.grass1 : C.grass2);   // contiguous meadows, not per-face dither
+    else if (e < 0.775) pick = C.rock;
+    else pick = e > 0.84 ? C.snow : C.rockHigh;
+    col.copy(pick);
+    for (let j = 0; j < 3; j++) {
+      colors[(i + j) * 3] = col.r; colors[(i + j) * 3 + 1] = col.g; colors[(i + j) * 3 + 2] = col.b;
+    }
+  }
+  terrainGeo.setAttribute('color', new THREE.Float32BufferAttribute(colors, 3));
+  terrainGeo.computeVertexNormals();       // non-indexed -> hard per-face normals
+}
+
+const terrain = new THREE.Mesh(terrainGeo, new THREE.MeshToonMaterial({
+  vertexColors: true, gradientMap: grad
+}));
+terrain.receiveShadow = true;   // receives cloud/mountain/city shadows; does not cast: a terrain that
+terrain.castShadow = false;     // shadows itself at grazing angles is exactly what stippled the oceans
+planetGroup.add(terrain);
+
+// inverted-hull outline: offset each vertex along its own normal => even rim
+{
+  const g = terrainGeo.clone();
+  const p = g.attributes.position, v = new THREE.Vector3();
+  for (let i = 0; i < p.count; i++) {
+    v.fromBufferAttribute(p, i);
+    v.addScaledVector(v.clone().normalize(), 0.012);
+    p.setXYZ(i, v.x, v.y, v.z);
+  }
+  g.computeVertexNormals();
+  planetGroup.add(new THREE.Mesh(g, OUTLINE));
+}
+
+// thin additive atmosphere halo just past the tallest peaks: gives the rim a glow against space
+{
+  const atmo = new THREE.Mesh(
+    new THREE.IcosahedronGeometry(R * 1.02, 3),    // hugs the ocean surface; peaks and clouds punch through it
+    new THREE.MeshBasicMaterial({
+      color: new THREE.Color('#58a6ff'), transparent: true, opacity: 0.3,
+      blending: THREE.AdditiveBlending, side: THREE.BackSide, depthWrite: false
+    })
+  );
+  scene.add(atmo);
+}
+
+/* ------------------------------------------------------------- cities */
+function perp(d) {
+  const ref = Math.abs(d.y) < 0.9 ? new THREE.Vector3(0, 1, 0) : new THREE.Vector3(1, 0, 0);
+  const u = new THREE.Vector3().crossVectors(ref, d).normalize();
+  const v = new THREE.Vector3().crossVectors(d, u);
+  return { u, v };
+}
+function dirAround(d, u, v, theta, phi, out) {   // writes into `out`; frame sampling is hot
+  const ct = Math.cos(theta), st = Math.sin(theta);
+  out.copy(d).multiplyScalar(ct)
+     .addScaledVector(u, st * Math.cos(phi))
+     .addScaledVector(v, st * Math.sin(phi))
+     .normalize();
+  return out;
+}
+
+const cities = [];
+{
+  // Towns must sit on genuinely flat ground or the road ribbons would clip in and out.
+  // Sample elevation 0.15 arc in each tangent direction: a town must be level to 2mm across it.
+  const FLAT_SAMPLE = 0.15, FLAT_MAX = 0.002;
+  const tries = 8000;
+  const near = new THREE.Vector3();
+  for (let t = 0; t < tries && cities.length < 9; t++) {
+    const z = Math.random() * 2 - 1, ang = Math.random() * TAU;
+    const rxy = Math.sqrt(1 - z * z);
+    const d = new THREE.Vector3(rxy * Math.cos(ang), z, rxy * Math.sin(ang));
+    const e = eAt(d);
+    if (e < 0.52 || e > 0.62 || Math.abs(d.y) > 0.72) continue;
+    if (cities.some(c => c.d.angleTo(d) < 0.45)) continue;   // towns are wider now; give them room
+    const frame = perp(d);
+    const e0 = elevFromE(e);
+    let flat = true;
+    for (let k = 0; k < 4 && flat; k++) {
+      const ox = k === 0 ? FLAT_SAMPLE : k === 1 ? -FLAT_SAMPLE : 0;
+      const oy = k === 2 ? FLAT_SAMPLE : k === 3 ? -FLAT_SAMPLE : 0;
+      near.copy(d).addScaledVector(frame.u, ox).addScaledVector(frame.v, oy).normalize();
+      if (Math.abs(elevFromE(eAt(near)) - e0) > FLAT_MAX) flat = false;
+    }
+    if (!flat) continue;
+    cities.push(Object.assign({ d, s: 0.024 + Math.random() * 0.012 }, frame));  // s = street pitch
+  }
+}
+const RING_K = [3.1, 3.9, 4.7];   // ring-road radii, in units of street pitch
+
+function windowsTexture() {
+  const cv = document.createElement('canvas');
+  cv.width = cv.height = 128;
+  const g = cv.getContext('2d');
+  g.fillStyle = '#000000';
+  g.fillRect(0, 0, 128, 128);
+  const cw = 16, ch = 128 / 12;
+  for (let row = 0; row < 12; row++) for (let col = 0; col < 8; col++) {
+    if (Math.random() < 0.38) continue;
+    const lit = Math.random() < 0.72;
+    g.fillStyle = lit ? (Math.random() < 0.3 ? '#ffb703' : '#ffe9a8') : '#0d1117';
+    g.fillRect(col * cw + 4, Math.round(row * ch + 2), cw - 8, Math.round(ch - 4));
+  }
+  const tex = new THREE.CanvasTexture(cv);
+  tex.colorSpace = THREE.SRGBColorSpace;
+  return tex;
+}
+
+const PALETTE = [0xe8564f, 0xf2a63b, 0xf7e6c4, 0x7ec8e3, 0x9ad178, 0xd88fb8, 0xc9cdd4, 0x5fbdb0, 0xf6d74a];
+const unitBox = new THREE.BoxGeometry(1, 1, 1);
+const buildingMat = new THREE.MeshToonMaterial({
+  color: 0xffffff, gradientMap: grad,
+  emissive: 0xffffff, emissiveMap: windowsTexture(), emissiveIntensity: 0.6
+});
+
+{
+  const SLOT_MAX = 25;                                   // 5x5 block grid per city
+  const count = cities.length * SLOT_MAX;
+  const buildings = new THREE.InstancedMesh(unitBox, buildingMat, count);
+  const outlines = new THREE.InstancedMesh(unitBox, OUTLINE, count);
+  buildings.castShadow = buildings.receiveShadow = true;
+  const m = new THREE.Matrix4(), up = new THREE.Vector3(), fwd = new THREE.Vector3();
+  const pos = new THREE.Vector3(), s1 = new THREE.Vector3(), s2 = new THREE.Vector3();
+  const bd = new THREE.Vector3(), col = new THREE.Color();
+  const TRIM = 0.0022;                                   // comic ink: thin against a building, visible when zoomed
+  const SINK = 0.006;                                    // bury the base so faceting can never show a float gap
+  let n = 0;
+  for (const city of cities) {
+    const s = city.s;
+    for (let gi = -2; gi <= 2; gi++) for (let gj = -2; gj <= 2; gj++) {
+      if (Math.random() < 0.14) continue;                // odd lots stay parks
+      const ring = Math.max(Math.abs(gi), Math.abs(gj)); // outer blocks stay short: a skyline
+      // block centers live on a tangent-plane street grid -> footprints can never overlap
+      bd.copy(city.d).addScaledVector(city.u, gi * s).addScaledVector(city.v, gj * s).normalize();
+      const w = s * (0.55 + Math.random() * 0.2);
+      const dep = s * (0.55 + Math.random() * 0.2);
+      const h = (0.018 + Math.pow(Math.random(), 1.6) * 0.045) * (1.45 - 0.32 * ring);
+      pos.copy(bd).multiplyScalar(R + elevFromE(eAt(bd)) - SINK + h * 0.5);
+      up.copy(bd);
+      fwd.copy((gi + gj) % 2 ? city.v : city.u);         // all blocks face the same two streets
+      fwd.applyAxisAngle(up, (Math.random() - 0.5) * 0.2);
+      basisMatrix(up, fwd, m);
+      s1.set(w, h, dep);
+      m.scale(s1);
+      m.setPosition(pos);
+      buildings.setMatrixAt(n, m);
+      col.setHex(PALETTE[(Math.random() * PALETTE.length) | 0]);
+      buildings.setColorAt(n, col);
+      basisMatrix(up, fwd, m);
+      s2.set(w + TRIM * 2, h + TRIM * 2, dep + TRIM * 2);
+      m.scale(s2);
+      m.setPosition(pos);
+      outlines.setMatrixAt(n, m);
+      n++;
+    }
+  }
+  buildings.count = outlines.count = n;                  // parks shrank the used slots
+  buildings.instanceMatrix.needsUpdate = true;
+  buildings.instanceColor.needsUpdate = true;
+  outlines.instanceMatrix.needsUpdate = true;
+  planetGroup.add(buildings, outlines);
+}
+
+/* -------------------------------------------------------------- roads */
+// Streets between the blocks and ring roads where the cars actually drive.
+// Ribbons straddle the terrain: base buried, crown a few mm proud, so they can
+// never sit coplanar with the ground and z-fight. Tiles butt, never overlap.
+{
+  const roads = new THREE.InstancedMesh(unitBox, toon(0x23262e), cities.length * 128);
+  roads.receiveShadow = true;
+  const m = new THREE.Matrix4(), up = new THREE.Vector3(), fwd = new THREE.Vector3();
+  const td = new THREE.Vector3(), tp = new THREE.Vector3(), sc = new THREE.Vector3(), tv = new THREE.Vector3();
+  const THICK = 0.006;
+  // Two families of grid streets cross each other; keeping them 1mm apart in height
+  // means their overlap patches can never z-fight. Ring tiles butt against each other.
+  const RIDGE_H = 0.0035, RIDGE_V = 0.0046;
+  let n = 0;
+  const tile = (dir, along, width, length, ridge) => {
+    up.copy(dir);
+    fwd.copy(along).addScaledVector(up, -along.dot(up)).normalize();   // project onto the local tangent plane
+    basisMatrix(up, fwd, m);
+    m.scale(sc.set(width, THICK, length));
+    m.setPosition(tp.copy(dir).multiplyScalar(R + elevFromE(eAt(dir)) + ridge - THICK / 2));
+    roads.setMatrixAt(n++, m);
+  };
+  for (const city of cities) {
+    const s = city.s;
+    for (let g = -2; g <= 1; g++) {                    // 4 avenues each way, laid out in segments
+      for (let h = -2; h <= 2; h++) {
+        td.copy(city.d).addScaledVector(city.u, (g + 0.5) * s).addScaledVector(city.v, h * s).normalize();
+        tile(td, city.v, s * 0.4, s, RIDGE_V);         // avenue along v
+        td.copy(city.d).addScaledVector(city.u, h * s).addScaledVector(city.v, (g + 0.5) * s).normalize();
+        tile(td, city.u, s * 0.4, s, RIDGE_H);         // avenue along u
+      }
+    }
+    for (let k = 0; k < 3; k++) {                      // ring roads, 24 chord tiles each
+      const theta = RING_K[k] * s;
+      const len = 2 * Math.sin(Math.PI / 24) * theta * 0.99;
+      for (let p = 0; p < 24; p++) {
+        const phi = p * TAU / 24;
+        td.copy(city.d).multiplyScalar(Math.cos(theta))
+          .addScaledVector(city.u, Math.sin(theta) * Math.cos(phi))
+          .addScaledVector(city.v, Math.sin(theta) * Math.sin(phi)).normalize();
+        tv.copy(city.v).multiplyScalar(Math.cos(phi)).addScaledVector(city.u, -Math.sin(phi));
+        tile(td, tv, s * 0.6, len, RIDGE_H);
+      }
+    }
+  }
+  roads.count = n;
+  roads.instanceMatrix.needsUpdate = true;
+  planetGroup.add(roads);
+}
+
+/* ------------------------------------------------------------- trees */
+{
+  const trunkGeo = new THREE.CylinderGeometry(0.0016, 0.0024, 0.011, 5).toNonIndexed();
+  trunkGeo.computeVertexNormals();
+  trunkGeo.translate(0, 0.0055, 0);
+  const leafGeo = new THREE.ConeGeometry(0.006, 0.017, 6).toNonIndexed();
+  leafGeo.computeVertexNormals();
+  leafGeo.translate(0, 0.0195, 0);
+  const trunkMat = toon(0x7a5230);
+  const leafMat = new THREE.MeshToonMaterial({ color: 0xffffff, gradientMap: grad });
+  const MAX = 650;
+  const trunks = new THREE.InstancedMesh(trunkGeo, trunkMat, MAX);
+  const leaves = new THREE.InstancedMesh(leafGeo, leafMat, MAX);
+  trunks.castShadow = leaves.castShadow = true;
+  trunks.receiveShadow = leaves.receiveShadow = true;
+  const m = new THREE.Matrix4(), col = new THREE.Color(), pos = new THREE.Vector3();
+  const q = new THREE.Quaternion(), scl = new THREE.Vector3();
+  const UP = new THREE.Vector3(0, 1, 0);
+  let n = 0;
+  for (let t = 0; t < 6000 && n < MAX; t++) {
+    const z = Math.random() * 2 - 1, ang = Math.random() * TAU;
+    const rxy = Math.sqrt(1 - z * z);
+    const d = new THREE.Vector3(rxy * Math.cos(ang), z, rxy * Math.sin(ang));
+    const e = eAt(d);
+    if (e < 0.55 || e > 0.66 || Math.abs(d.y) > 0.75) continue;
+    if (cities.some(c => c.d.angleTo(d) < 5 * c.s)) continue;  // keep trees off the town and its ring roads
+    const s = 0.7 + Math.random() * 0.9;
+    pos.copy(d).multiplyScalar(R + elevFromE(e));
+    q.setFromUnitVectors(UP, d);
+    scl.set(s, s, s);
+    m.compose(pos, q, scl);
+    trunks.setMatrixAt(n, m);
+    leaves.setMatrixAt(n, m);
+    col.setHSL(0.31 + Math.random() * 0.07, 0.55, 0.38 + Math.random() * 0.1, THREE.SRGBColorSpace);
+    leaves.setColorAt(n, col);
+    n++;
+  }
+  trunks.count = leaves.count = n;
+  trunks.instanceMatrix.needsUpdate = true;
+  leaves.instanceMatrix.needsUpdate = true;
+  leaves.instanceColor.needsUpdate = true;
+  planetGroup.add(trunks, leaves);
+}
+
+/* --------------------------------------------------------------- cars */
+// Two InstancedMeshes — tinted body, shared dark trim (cabin + wheels merged) —
+// instead of 62 Groups with 6 meshes each: ~370 draw calls collapse to 2.
+const carBodyGeo = new THREE.BoxGeometry(0.011, 0.006, 0.019);
+carBodyGeo.translate(0, 0.0065, 0);
+const carDetailGeo = mergeGeometries([
+  new THREE.BoxGeometry(0.008, 0.005, 0.010).translate(0, 0.0117, 0),
+  new THREE.BoxGeometry(0.004, 0.005, 0.005).translate(-0.0058, 0.0025, -0.0062),
+  new THREE.BoxGeometry(0.004, 0.005, 0.005).translate( 0.0058, 0.0025, -0.0062),
+  new THREE.BoxGeometry(0.004, 0.005, 0.005).translate(-0.0058, 0.0025,  0.0062),
+  new THREE.BoxGeometry(0.004, 0.005, 0.005).translate( 0.0058, 0.0025,  0.0062)
+]);
+const carMax = cities.length * 8;
+const carBodies = new THREE.InstancedMesh(carBodyGeo, toon(0xffffff), carMax);   // instanceColor tints
+const carDetails = new THREE.InstancedMesh(carDetailGeo, toon(0x14161c), carMax);
+carBodies.castShadow = carBodies.receiveShadow = true;
+carDetails.castShadow = carDetails.receiveShadow = true;
+planetGroup.add(carBodies, carDetails);
+
+const cars = [];
+const carColors = [0xf25c54, 0x3d8bf2, 0xf6c445, 0x7ac74f, 0xffffff, 0x8e6bd6, 0xff8c42];
+{
+  const col = new THREE.Color();
+  for (const city of cities) {
+    const rings = RING_K.map(k => k * city.s);   // the same circles the ring-road tiles draw
+    const perCity = 6 + (Math.random() * 3 | 0);
+    for (let i = 0; i < perCity; i++) {
+      const idx = cars.length;
+      col.setHex(carColors[(Math.random() * carColors.length) | 0]);
+      carBodies.setColorAt(idx, col);
+      cars.push({
+        city, theta: rings[i % rings.length],
+        phi0: Math.random() * TAU,
+        omega: (0.12 + Math.random() * 0.22) * (Math.random() < 0.5 ? 1 : -1),
+        idx
+      });
+    }
+  }
+  carBodies.count = carDetails.count = cars.length;   // allocated 8/city, used 6-8
+  carBodies.instanceColor.needsUpdate = true;
+}
+
+/* ------------------------------------------------------------ planes */
+function buildPlane(bodyColor) {
+  const g = new THREE.Group();
+  const bodyMat = toon(bodyColor), accentMat = toon(0xf4f6fa);
+  const fuselage = new THREE.CylinderGeometry(0.016, 0.016, 0.09, 10);
+  fuselage.rotateX(Math.PI / 2);
+  const nose = new THREE.ConeGeometry(0.016, 0.03, 10);
+  nose.rotateX(Math.PI / 2);
+  const wing = new THREE.BoxGeometry(0.14, 0.006, 0.032);
+  const fin = new THREE.BoxGeometry(0.005, 0.032, 0.024);
+  const stab = new THREE.BoxGeometry(0.055, 0.005, 0.02);
+  const parts = [
+    [fuselage, bodyMat, 0, 0, 0],
+    [nose, accentMat, 0, 0, 0.06],
+    [wing, accentMat, 0, 0.003, 0.008],
+    [fin, bodyMat, 0, 0.02, -0.043],
+    [stab, accentMat, 0, 0.006, -0.045],
+    [new THREE.SphereGeometry(0.011, 8, 6), toon(0x1b2a3a), 0, 0.014, 0.02]
+  ];
+  for (const [geo, mat, x, y, z] of parts) {
+    const mesh = new THREE.Mesh(geo, mat);
+    mesh.position.set(x, y, z);
+    mesh.castShadow = true;
+    g.add(mesh);
+    const shell = new THREE.Mesh(geo, OUTLINE);
+    shell.position.set(x, y, z);
+    shell.scale.setScalar(1.09);
+    g.add(shell);
+  }
+  const prop = new THREE.Group();
+  const bladeGeo = new THREE.BoxGeometry(0.004, 0.05, 0.002);
+  const bladeMat = toon(0x22242c);
+  for (let i = 0; i < 2; i++) {
+    const blade = new THREE.Mesh(bladeGeo, bladeMat);
+    blade.rotation.z = i * Math.PI / 2;
+    blade.position.z = 0.078;
+    prop.add(blade);
+  }
+  g.add(prop);
+  g.userData.prop = prop;
+  return g;
+}
+
+const MAXPT = 90;
+const planes = [];
+for (const color of [0xe8564f, 0x4a90e2]) {
+  const plane = buildPlane(color);
+  // faint contrail that traces the great circle behind the aircraft
+  const trailGeo = new THREE.BufferGeometry();
+  trailGeo.setAttribute('position', new THREE.BufferAttribute(new Float32Array(MAXPT * 3), 3));
+  trailGeo.setDrawRange(0, 0);
+  const trail = new THREE.Line(trailGeo, new THREE.LineBasicMaterial({
+    color: 0xffffff, transparent: true, opacity: 0.35
+  }));
+  scene.add(plane, trail);
+  const axis = new THREE.Vector3(Math.random() * 2 - 1, Math.random() * 1.6 - 0.8, Math.random() * 2 - 1).normalize();
+  const frame = perp(axis);
+  planes.push({
+    plane, trail,
+    trailAttr: trailGeo.attributes.position,
+    len: 0,
+    axis, u: frame.u, v: frame.v,
+    omega: (0.16 + Math.random() * 0.1) * (Math.random() < 0.5 ? 1 : -1),
+    phase: Math.random() * TAU
+  });
+}
+
+/* ------------------------------------------------------------ clouds */
+const cloudGroup = new THREE.Group();
+scene.add(cloudGroup);
+{
+  const puffGeo = new THREE.SphereGeometry(1, 7, 5).toNonIndexed();
+  puffGeo.computeVertexNormals();
+  const cloudMat = toon(0xf7f9ff);
+  for (let i = 0; i < 22; i++) {
+    const z = Math.random() * 2 - 1, ang = Math.random() * TAU;
+    const rxy = Math.sqrt(1 - z * z);
+    const d = new THREE.Vector3(rxy * Math.cos(ang), z * 0.85, rxy * Math.sin(ang)).normalize();
+    const alt = 1.075 + Math.random() * 0.045;   // hug the surface; their shadows should land ON it
+    const cluster = new THREE.Group();
+    cluster.position.copy(d).multiplyScalar(alt);
+    cluster.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), d);
+    const puffs = 3 + (Math.random() * 3 | 0);
+    for (let p = 0; p < puffs; p++) {
+      const s = 0.03 + Math.random() * 0.045;
+      const puff = new THREE.Mesh(puffGeo, cloudMat);
+      puff.position.set((Math.random() - 0.5) * 0.12, (Math.random() - 0.5) * 0.03, (Math.random() - 0.5) * 0.1);
+      puff.scale.set(s, s * 0.6, s);            // squash radially (cluster-local +Y is the surface normal)
+      puff.castShadow = true;
+      const shell = new THREE.Mesh(puffGeo, OUTLINE);
+      shell.position.copy(puff.position);
+      shell.scale.set(s + 0.004, s * 0.6 + 0.004, s + 0.004);   // absolute ink weight, same as buildings
+      cluster.add(puff, shell);
+    }
+    cluster.userData = { d, alt, bob: Math.random() * TAU };
+    cloudGroup.add(cluster);
+  }
+}
+
+/* -------------------------------------------------------- moon, stars */
+const moonPivot = new THREE.Group();
+moonPivot.rotation.x = 0.35;
+scene.add(moonPivot);
+const moon = new THREE.Mesh(new THREE.IcosahedronGeometry(0.15, 1), toon(0xb8bcc8));
+moon.geometry.computeVertexNormals();
+moon.position.set(2.9, 0, 0);
+moon.castShadow = true;
+const moonOutline = new THREE.Mesh(moon.geometry, OUTLINE);
+moonOutline.position.copy(moon.position);
+moonOutline.scale.setScalar(1.035);
+moonPivot.add(moon, moonOutline);
+
+{
+  const N = 1800;
+  const pos = new Float32Array(N * 3);
+  for (let i = 0; i < N; i++) {
+    const z = Math.random() * 2 - 1, ang = Math.random() * TAU;
+    const rxy = Math.sqrt(1 - z * z), r = 70 + Math.random() * 30;
+    pos[i * 3] = rxy * Math.cos(ang) * r;
+    pos[i * 3 + 1] = z * r;
+    pos[i * 3 + 2] = rxy * Math.sin(ang) * r;
+  }
+  const g = new THREE.BufferGeometry();
+  g.setAttribute('position', new THREE.BufferAttribute(pos, 3));
+  scene.add(new THREE.Points(g, new THREE.PointsMaterial({
+    color: 0xc3cbff, size: 0.3, sizeAttenuation: true, transparent: true, opacity: 0.85
+  })));
+}
+
+/* ------------------------------------------------------------ animate */
+const clock = new THREE.Clock();
+const upV = new THREE.Vector3(), fwdV = new THREE.Vector3();
+const dirScratch = new THREE.Vector3(), posScratch = new THREE.Vector3();
+const basisScratch = new THREE.Matrix4(), carM = new THREE.Matrix4();
+const rollQ = new THREE.Quaternion();
+const LOCAL_Z = new THREE.Vector3(0, 0, 1);
+let simT = 0;                                   // simulation clock, decoupled from wall time
+
+function updateCars(t) {
+  for (const c of cars) {
+    const phi = c.phi0 + c.omega * t;
+    dirAround(c.city.d, c.city.u, c.city.v, c.theta, phi, dirScratch);
+    upV.copy(dirScratch);                                            // surface normal
+    fwdV.copy(c.city.v).multiplyScalar(Math.cos(phi))
+        .addScaledVector(c.city.u, -Math.sin(phi))
+        .multiplyScalar(Math.sign(c.omega));                         // face the direction of travel
+    basisMatrix(upV, fwdV, carM);
+    carM.setPosition(posScratch.copy(dirScratch).multiplyScalar(R + elevFromE(eAt(dirScratch)) + 0.0038));  // ride on the ring road
+    carBodies.setMatrixAt(c.idx, carM);
+    carDetails.setMatrixAt(c.idx, carM);
+  }
+  carBodies.instanceMatrix.needsUpdate = true;
+  carDetails.instanceMatrix.needsUpdate = true;
+}
+
+function updatePlanes(t, dt, hitch) {
+  for (const pl of planes) {
+    const phi = pl.phase + pl.omega * t;
+    dirAround(pl.axis, pl.u, pl.v, Math.PI / 2, phi, dirScratch);
+    const alt = R + 0.125 + 0.014 * Math.sin(phi * 2 + pl.phase);
+    upV.copy(dirScratch);
+    fwdV.copy(pl.v).multiplyScalar(Math.cos(phi))
+        .addScaledVector(pl.u, -Math.sin(phi))
+        .multiplyScalar(Math.sign(pl.omega));
+    basisMatrix(upV, fwdV, basisScratch);
+    pl.plane.quaternion.setFromRotationMatrix(basisScratch);
+    rollQ.setFromAxisAngle(LOCAL_Z, 0.16 * Math.sin(phi * 3 + pl.phase));  // bank about the plane's own +Z
+    pl.plane.quaternion.multiply(rollQ);
+    pl.plane.position.copy(dirScratch).multiplyScalar(alt);
+    pl.plane.userData.prop.rotation.z += dt * 35;
+
+    const attr = pl.trailAttr;
+    if (hitch) pl.len = 0;                            // time jumped: old samples are meaningless
+    if (pl.len < MAXPT) pl.len++;
+    else attr.array.copyWithin(0, 3);                 // drop the oldest sample, zero allocations
+    attr.setXYZ(pl.len - 1, pl.plane.position.x, pl.plane.position.y, pl.plane.position.z);
+    attr.needsUpdate = true;
+    pl.trail.geometry.setDrawRange(0, pl.len);
+  }
+}
+
+renderer.setAnimationLoop(() => {
+  const raw = clock.getDelta();
+  const dt = Math.min(raw, 0.05);                     // clamp: a paused tab must not fast-forward life
+  const hitch = raw > 0.05;
+  simT += dt;
+  planetGroup.rotation.y += 0.035 * dt;               // the planet itself turns
+  cloudGroup.rotation.y -= 0.011 * dt;                // clouds drift the other way
+  for (const cl of cloudGroup.children) {
+    const bob = Math.sin(simT * 0.5 + cl.userData.bob) * 0.008;
+    cl.position.copy(cl.userData.d).multiplyScalar(cl.userData.alt + bob);
+  }
+  moonPivot.rotation.y += 0.05 * dt;
+  updateCars(simT);
+  updatePlanes(simT, dt, hitch);
+  controls.update();
+  renderer.render(scene, camera);
+});
+
+addEventListener('resize', () => {
+  camera.aspect = innerWidth / innerHeight;
+  camera.updateProjectionMatrix();
+  renderer.setSize(innerWidth, innerHeight);
+});
+</script>
+</body>
+</html>
